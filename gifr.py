@@ -6,10 +6,11 @@ For: Hackathon October 2016
 
 Create a gif of a feature by simply providing point coordinates.
 Features
-    -   Ordering methods
+    -   Requests images from GBDX Streaming (IPE TMS Chipper)
+    -   Parameterized ordering methods
     -   DigitalGlobe logo watermark for marketing, ex. Instagram
-    -   debugging watermarks of IDAHO image id and timestamp
-    -   throws out chips that are black, too grey, or bright white. Black and flat grey pixels are from boarder no data
+    -   Debugging watermarks of IDAHO multi image id and timestamp
+    -   Throws out chips that are black, too grey, or bright white. Black and flat grey pixels are from boarder no data
         values.
     -   Selects highest res imagery if there are too many of chips.
     -   Creates a repeating looped GIF.
