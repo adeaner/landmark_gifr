@@ -1,0 +1,5 @@
+imageio==1.6
+numpy==1.11.2
+requests==2.11.1
+Pillow==3.4.2
+docopt==0.6.2
