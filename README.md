@@ -2,8 +2,6 @@
 
 Create a gif of a feature by simply providing point coordinates.
 
-** Que to Nate: Please open gifr.py. It has a feature list, usage, examples, and feature requests/TODOs. **
-
 ## Easy Peazy Install
 Install python dependencies:
 ```

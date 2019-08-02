@@ -3,13 +3,13 @@ Landmark Gifr
 
 By: Ashley Deaner
 For: Hackathon October 2016
+     Hackathon August 2019
 
 Create a gif of a feature by simply providing point coordinates.
 Features
-    -   Requests images from GBDX Streaming (IPE TMS Chipper)
+    -   Requests images from RDA
     -   Parameterized ordering methods
     -   DigitalGlobe logo watermark for marketing, ex. Instagram
-    -   Debugging watermarks of IDAHO multi image id and timestamp
     -   Throws out chips that are black, too grey, or bright white. Black and flat grey pixels are from boarder no data
         values.
     -   Selects highest res imagery if there are too many of chips.
@@ -17,13 +17,13 @@ Features
 
 Usage:
     gifr.py --coord=COORD
-    gifr.py --coord=COORD [--resolution=RESOLUTION] [--width=WIDTH] [--order=ORDER] [-v | --verbose]
+    gifr.py --coord=COORD [--width=WIDTH] [--order=ORDER] [-v | --verbose]
 
 Options:
     --coord=COORD               Latitude and Longitude in decimal degrees. Ex. 40.68924716076039, -74.04454171657562
     --width=WIDTH               Width/ height of square image. Doubling the width quadruples the speed and
                                 file size [default: 512]
-    --resolution=RESOLUTION     Pixel resolution. I recommend leaving width alone for speed and adjusting resolution for
+    --gsd=GSD                   Pixel GSD. I recommend leaving width alone for speed and adjusting gsd for
                                 zoom level [default: 0.3]
     --order=ORDER               ordering method. [default: flyover]
                                 flyover: Fly over landmark. Recommended for tall structures
@@ -34,19 +34,19 @@ Options:
     -h --help
 
 Examples:
-    python gifr.py --coord="40.68924716076039, -74.04454171657562"                      # Statue of Liberty
-    python gifr.py --coord="35.710139, 139.810833" --resolution=1.2 --order=panby       # Tokyo Skytree
-    python gifr.py --coord="39.912419, -105.001847" --resolution=0.6  --order=date      # DG
-    python gifr.py --coord="-33.857043, 151.215173" --resolution=0.6 --order=panby      # Sydney Opera House
-    python gifr.py --coord="48.858222, 2.2945" --resolution=1.2 --order=panby           # Eiffel Tower
-    python gifr.py --coord="32.896944, -97.038056" --order=date --resolution=1.2        # Dallas Airport
-    python gifr.py --coord="-22.948611, -43.157222" --resolution=1.2 --order=date       # Sugarloaf Mountain
-    python gifr.py --coord="25.197139, 55.274111" --resolution=2.4 --order=panby        # Burj Khalifa, UAE
-    python gifr.py --coord="41.866091, -87.617014" --resolution=5 --order=date          # Field Museum, zoomed out
-    python gifr.py --coord="41.890168, 12.492380" --resolution=1.2 --order=panby        # Colosseum
-    python gifr.py --coord="-22.951944, -43.210556" --resolution=0.6 --order=panby      # Christ the Redeemer statue
+    python gifr.py --coord="40.68924716076039, -74.04454171657562"               # Statue of Liberty
+    python gifr.py --coord="35.710139, 139.810833" --gsd=1.2 --order=panby       # Tokyo Skytree
+    python gifr.py --coord="39.912419, -105.001847" --gsd=0.6  --order=date      # DG
+    python gifr.py --coord="-33.857043, 151.215173" --gsd=0.6 --order=panby      # Sydney Opera House
+    python gifr.py --coord="48.858222, 2.2945" --gsd=1.2 --order=panby           # Eiffel Tower
+    python gifr.py --coord="32.896944, -97.038056" --gsd=1.2 --order=date        # Dallas Airport
+    python gifr.py --coord="-22.948611, -43.157222" --gsd=1.2 --order=date       # Sugarloaf Mountain
+    python gifr.py --coord="25.197139, 55.274111" --gsd=2.4 --order=panby        # Burj Khalifa, UAE
+    python gifr.py --coord="41.866091, -87.617014" --gsd=5 --order=date          # Field Museum, zoomed out
+    python gifr.py --coord="41.890168, 12.492380" --gsd=1.2 --order=panby        # Colosseum
+    python gifr.py --coord="-22.951944, -43.210556" --gsd=0.6 --order=panby      # Christ the Redeemer statue
 
-Feature Requests/ TODO:
+Feature Requests:
 - season ordering methods
 - auto registration - image to image registration GBDX Task
 - histogram equalization
@@ -54,332 +54,315 @@ Feature Requests/ TODO:
 - filepath
 
 """
+import collections
 import json
 import logging
 import os
 import time
-from StringIO import StringIO
+from io import BytesIO
 
 import imageio
 import numpy as np
 import requests
 from PIL import Image, ImageStat, ImageDraw, ImageFont
-from dateutil import parser
 from docopt import docopt
 
-global lat
-global lon
-
-# TODO: DON'T CHECK IN WITH TOKEN
-access_token = None
+# DON'T CHECK-IN WITH TOKEN
+access_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Ik1Ea3hPREE1UTBFeFJUTXpOek01UlVSRE5qWTRRelpHT1ROR1FUWTBN" \
+               "MFJHTnpjMFEwTTFSZyJ9.eyJodHRwczovL2dlb2JpZ2RhdGEuaW8vYWNjb3VudF9sZXZlbCI6ImN1c3RvbSIsImh0dHBzOi8vZ2V" \
+               "vYmlnZGF0YS5pby9pZCI6Ijk4NTk3OGUwLThhMTktNDQ2ZS1iODU2LWNmZDAzOTczNzBhMyIsImh0dHBzOi8vZ2VvYmlnZGF0YS5" \
+               "pby9hY2NvdW50X2lkIjoiN2IyMTZiZDktNjUyMy00Y2E5LWFhM2ItMWQ4YTU5OTRmMDU0IiwiaHR0cHM6Ly9nZW9iaWdkYXRhLml" \
+               "vL3JvbGVzIjpbInN1cGVyX2FkbWluIl0sImh0dHBzOi8vZ2VvYmlnZGF0YS5pby9lbWFpbCI6ImFzaGxleS5kZWFuZXJAZGlnaXR" \
+               "hbGdsb2JlLmNvbSIsImlzcyI6Imh0dHBzOi8vZGlnaXRhbGdsb2JlLXByb2R1Y3Rpb24uYXV0aDAuY29tLyIsInN1YiI6ImF1dGg" \
+               "wfGdiZHh8MTEiLCJhdWQiOlsiZ2VvYmlnZGF0YS5pbyIsImh0dHBzOi8vZGlnaXRhbGdsb2JlLXByb2R1Y3Rpb24uYXV0aDAuY29" \
+               "tL3VzZXJpbmZvIl0sImlhdCI6MTU2NDY3ODI0NCwiZXhwIjoxNTY1MjgzMDQ0LCJhenAiOiJkYnhVNWNaZGtPMFNIVG1zaEZDV25" \
+               "JODk0dnhRMU5ieiIsInNjb3BlIjoib3BlbmlkIGVtYWlsIG9mZmxpbmVfYWNjZXNzIiwiZ3R5IjoicGFzc3dvcmQifQ.TAQhvfY" \
+               "HgvmI_e3RJtDwtcoVdUv24kRgQ8CfacH0RcWZZttKPa-zl1MI04IE9njxCH6KbbvIxZjG4MNQLaxLU9d_Ou_SQ8NjOe6oxwh3dr" \
+               "qJt7LAVHf86rRVjmSGHtMlP4YstHRZ5Pgz5yayaCkm9oVgUWQKY_F_gRC_N7VWpG6g1XlKKPafDa0D9tJHv70Qq2giczV-EsHcU" \
+               "M67MvO_FieivyHVc1lucZjTEva7hpy3gTEszcNAVxPMEA6yLRAoRVr1jKcIXSDb6D31qZLWyaWVNbY5N_lY5ZLE5JlzZe21X3xq" \
+               "pjvUkREKpBUCXMe-s5_lkWC5J4XOwn0W8QD1yA"
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s: %(funcName)s: %(message)s",
                     datefmt="%Y-%m-%d %H:%M:%S")
 
 
-def catalog_search(lat, lon):
-    """
-    Search the GBDX Catalog for IDAHO imagery
+class Gifr:
 
-    :param lat: decimal latitude
-    :param lon: decimal longitude
-    :return: JSON search results
-    """
-    point = "{lon} {lat}".format(lon=lon, lat=lat)
+    def __init__(self, lat, lon, tile_size, order):
+        self.lat = lat
+        self.lon = lon
+        self.tile_size = tile_size
+        self.order = order
 
-    search = {
-        "searchAreaWkt": "POLYGON (({point}, {point}, {point}, {point}, {point}))".format(point=point),
-        "filters": ["cloudCover < 80"],
-        "types": ["IDAHOImage"]
-    }
+        self.results = self.catalog_search()
+        self.order_images()
 
-    def __search(search):
+        self.images = self.stack_chips()
 
-        header = {"Authorization": "Bearer {}".format(access_token),
-                  "Content-Type": "application/json"}
-        result = requests.post("https://geobigdata.io/catalog/v1/search", headers=header, data=json.dumps(search))
+        # fade twice
+        self.fade_images()
+        self.fade_images()
 
-        if not len(result.json()["results"]) > 0:
-            raise ValueError("No catalog results found for {0}, {1}".format(lat, lon))
+        # make a loop
+        self.images = self.images + list(reversed(self.images[1:-1]))
 
-        return result.json()
+        self.create_gif()
 
-    result = __search(search)
+    def catalog_search(self):
+        """
+        Search the GBDX Catalog for IDAHO imagery
 
-    # reduce results by increasing cloud cover
-    if len(result["results"]) > 50:
-        search["filters"] = ["cloudCover < 50"]
-        result = __search(search)
+        :return: JSON search results
+        """
+        point = "{lon} {lat}".format(lon=self.lon, lat=self.lat)
 
-    # reduce results by using only WV03
-    if len(result["results"]) > 50:
-        search["filters"] = ["cloudCover < 20", "sensorPlatformName = 'WV03'"]
-        result = __search(search)
+        search = {
+            "searchAreaWkt": "POLYGON (({point}, {point}, {point}, {point}, {point}))".format(point=point),
+            "filters": ["cloudCover < 80", "sensorName LIKE Multispectral"],
+            "types": ["IDAHOImage"]
+        }
 
-    logging.debug("Catalog search returned {} records".format(len(result["results"])))
+        def __search(body):
 
-    return result
+            header = {"Authorization": "Bearer {}".format(access_token),
+                      "Content-Type": "application/json"}
+            response = requests.post("https://geobigdata.io/catalog/v2/search", headers=header, data=json.dumps(body))
 
+            if not len(response.json()["results"]) > 0:
+                raise ValueError("No catalog results found for {0}, {1}".format(self.lat, self.lon))
 
-def parse_search(search_result):
-    """
-    Pair multispectral and panchromatic images and include sorting properties.
+            return response.json()
 
-    :param search_result: JSON search result
-    :return: [[multispectral IDAHO id, panchromatic IDAHO id, offNadirAngle, satAzimuth],[]]
-    """
-    pairs = dict()
+        results = __search(search)["results"]
 
-    for result in search_result["results"]:
-        vdi = result["properties"]["vendorDatasetIdentifier"]
+        # deduplicate catalog ids
+        unique_catalog_ids = []
+        unique_results = []
+        for i in range(0, len(results) - 1):
+            if results[i]["properties"]["catalogID"] not in unique_catalog_ids:
+                unique_catalog_ids.append(results[i]["properties"]["catalogID"])
+                unique_results.append(results[i])
+        results = unique_results
 
-        # add vdi to pair list of it does not exist
-        if vdi not in pairs:
-            pairs[vdi] = [None] * 6
+        # reduce results by increasing cloud cover
+        if len(results) > 50:
+            search["filters"] = ["cloudCover < 50"]
+            results = __search(search)
 
-        # fill in sets
-        if result["properties"]["sensorName"] == "Panchromatic":
-            # assume off nadir angle already set, just fill in pan id
-            pairs[vdi][1] = result["identifier"]
+        # reduce results by using only WV03
+        if len(results) > 50:
+            search["filters"] = ["cloudCover < 20", "sensorPlatformName = 'WV03'"]
+            results = __search(search)
+
+        logging.debug("Catalog search returned {} records".format(len(results)))
+
+        return results
+
+    def order_images(self):
+        """
+        ordering methods:
+        flyover - similar quadrant, ordered by off nadir angle
+        panby - similar nadir angle, ordered by azimuth
+        seasons - ordered by month/day
+        date - ordered by date
+        """
+
+        def __collect_similar(results, index):
+
+            if len(results) > 10:
+                bins = None
+                if index == "satAzimuth":
+                    # azimuth bins
+                    bins = np.linspace(0, 360, 7)
+                elif index == "offNadir":
+                    # off nadir bins
+                    bins = np.linspace(0, 90, 7)
+                images_in_bins = collections.defaultdict(list)
+                for val in results:
+                    images_in_bins[int(np.digitize(val["properties"][index], bins))].append(val)
+
+                return max(images_in_bins.values(), key=len)
+            else:
+                # don't trim too hard
+                return results
+
+        def __trim_number_of_pairs(results):
+            # if there is a lot of images still, just keep WV sats
+            if len(results) > 10:
+                filtered_results = list(filter(lambda e: e["properties"]["sensorPlatformName"] in
+                                                          ["WORLDVIEW02_VNIR", "WORLDVIEW03_VNIR"], results))
+                if len(filtered_results) >= 5:
+                    results = filtered_results
+            if len(results) > 10:
+                filtered_results = list(filter(lambda e: e["properties"]["sensorPlatformName"] in
+                                                          ["WORLDVIEW03_VNIR"], results))
+                if len(filtered_results) >= 5:
+                    results = filtered_results
+            return results
+
+        if self.order == "flyover":
+            similar = __collect_similar(self.results, "satAzimuth")  # similar azimuth
+            trimmed = __trim_number_of_pairs(similar)
+            self.results = sorted(trimmed, key=lambda x: float(x["properties"]["offNadirAngle"]))
+        elif self.order == "panby":
+            similar = __collect_similar(self.results, "offNadirAngle")
+            trimmed = __trim_number_of_pairs(similar)
+            self.results = sorted(trimmed, key=lambda x: float(x["properties"]["satAzimuth"]))
+        elif self.order == "date":
+            similar = __collect_similar(self.results, "offNadirAngle")
+            similar = __collect_similar(similar, "satAzimuth")
+            trimmed = __trim_number_of_pairs(similar)
+            self.results = sorted(trimmed, key=lambda x: x["properties"]["acquisitionDate"])
+
         else:
-            # assume sensors besides pan will work (8 band and 4 band)
-            pairs[vdi][0] = result["identifier"]
-            # fill in off nadir angle
-            pairs[vdi][2] = result["properties"]["offNadirAngle"]
-            pairs[vdi][3] = result["properties"]["satAzimuth"]
-            pairs[vdi][4] = result["properties"]["sensorPlatformName"]
-            pairs[vdi][5] = parser.parse(result["properties"]["acquisitionDate"])
+            raise (ValueError, "Order method not found")
 
-    # pop elements if list is not populated and strip vdi
-    list_pairs = []
-    for key, value in pairs.iteritems():
-        if None not in value:
-            list_pairs.append(value)
+        logging.info("Using the {0} best chips for {1} order method".format(len(self.results), self.order))
 
-    logging.info("Collected {} image pairs".format(len(list_pairs)))
+    @staticmethod
+    def get_chip(catalog_id, date, lat, lon, tile_size, debug=False, method=None):
+        """
+        Get an IDAHO/IPE image chip
+        :return: a PIL PNG image in numpy array format
+        """
 
-    return list_pairs
+        # IDAHO/IPE TMS Chipper
+        # http://gbdxdocs.digitalglobe.com/v1/docs/get-tms-tile
 
+        url = 'https://rda-api-v2-alpha.geobigdata.io/v2/template/' \
+              'a0d835db2dc7e2917bdf2b96300b9a1975fb2ef54d981d7f1d6a8f4c3eea915c' \
+              '/webtile/0/0?' \
+              'p=catalogId={catalog_id}' \
+              '&p=draType=RADIOMETRICDRA' \
+              '&p=crs=EPSG:32645' \
+              '&p=correctionType=Acomp' \
+              '&p=bands=Pansharp' \
+              '&p=destAT=%5B0.5, 0, 0, -0.5, 633242.065802063, 2495687.96968152%5D' \
+              '&p=bandSelection=RGB' \
+              '&nodeid=TileSize' \
+              '&ptileSize={tile_size}'.format(catalog_id=catalog_id,
+                                              lat=lat, long=lon, tile_size=tile_size)
+        try:
+            response = requests.get(url, headers={"Accept": "image/png",
+                                                  "Authorization": "Bearer " + access_token})
 
-def order_images(pairs, method):
-    """
-    ordering methods:
-    flyover - similar quadrant, ordered by off nadir angle
-    panby - similar nadir angle, ordered by azimuth
-    seasons - ordered by month/day
-    date - ordered by date
+            image = Image.open(BytesIO(response.content))
+            image.load()
+            image_palette = image.convert("RGB")
 
-    :param pairs:
-    :return: ordered pairs
-    """
+            logging.info("Got chip: {}".format(str(catalog_id)))
 
-    def __collect_similar(pairs, index):
+            # check for bright chips
+            # http://stackoverflow.com/questions/3490727/what-are-some-methods-to-analyze-image-brightness-using-python
+            image_l = image.convert("L")
+            stat = ImageStat.Stat(image_l)
+            logging.debug("Mean brightness: {}".format(stat.mean[0]))
+            if stat.mean[0] > 220:
+                logging.debug("bright image thrown out")
+                return None
+            elif stat.mean[0] < 45:
+                logging.debug("black or grey image thrown out")
+                return None
+            else:
+                pass
 
-        if len(pairs) > 10:
-            if index == 3:
-                # azimuth bins
-                bins = np.linspace(0, 360, 7)
-            elif index == 2:
-                # off nadir bins
-                bins = np.linspace(0, 90, 7)
-            import collections
-            images_in_bins = collections.defaultdict(list)
-            for val in pairs:
-                images_in_bins[int(np.digitize(val[index], bins))].append(val)
+            # check for black chips
+            count = 0
+            # tic = time.time()
+            pixels = image_palette.load()
+            for x in range(0, tile_size, int(tile_size / 100)):
+                c_pixel = pixels[x, x]
+                if c_pixel == (0, 0, 0):
+                    count += 1
+            # print("sample pixels took {} seconds".format(time.time() - tic))
+            logging.debug("Number of sampled black pixels: {}".format(count))
 
-            similar = max(images_in_bins.values(), key=len)
-            return similar
-        else:
-            # don't trim too hard
-            return pairs
+            if count < 10:
+                # image_palette.show()
+                pass
+            else:
+                logging.debug("black chip thrown out")
+                return None
 
-    def __trim_number_of_pairs(pairs):
-        # if there is alot of images still, just keep WV sats
-        if len(pairs) > 10:
-            filtered_pairs = filter(lambda e: e[4] in ["WV02", "WV03"], pairs)
-            if len(filtered_pairs) >= 5:
-                pairs = filtered_pairs
-        if len(pairs) > 10:
-            filtered_pairs = filter(lambda e: e[4] in ["WV03"], pairs)
-            if len(filtered_pairs) >= 5:
-                pairs = filtered_pairs
-        return pairs
+            draw = ImageDraw.Draw(image_palette)
+            font = ImageFont.truetype("/Library/Fonts/Arial Bold.ttf", 16)
+            # watermark idaho image id
+            if debug:
+                draw.text((20, 20), catalog_id, (255, 255, 255), font=font)
+            # watermark timestamp
+            if method == "date":
+                draw.text((20, tile_size - 20), date.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), (255, 255, 255), font=font)
 
-    if method == "flyover":
-        similar = __collect_similar(pairs, 3)  # similar azimuth
-        trimmed = __trim_number_of_pairs(similar)
-        ordered_pairs = sorted(trimmed, key=lambda x: float(x[2]))  # ordered by off nadir angle
-    elif method == "panby":
-        similar = __collect_similar(pairs, 2)  # similar off nadir angle
-        trimmed = __trim_number_of_pairs(similar)
-        ordered_pairs = sorted(trimmed, key=lambda x: float(x[3]))  # ordered by azimuth
-    elif method == "date":
-        similar = __collect_similar(pairs, 2)  # similar off nadir angle
-        similar = __collect_similar(similar, 3)  # similar off nadir angle
-        trimmed = __trim_number_of_pairs(similar)
-        ordered_pairs = sorted(trimmed, key=lambda x: x[5])
+            layer = Image.new('RGBA', image_palette.size, (0, 0, 0, 0))
+            watermark = Image.open("dglogo-whiteonly-std.png")
 
-    else:
-        raise (ValueError, "Order method not found")
+            # scale, but preserve the aspect ratio
+            ratio = min(
+                float(image_palette.size[0]) / watermark.size[0], float(image_palette.size[1]) / watermark.size[1])
+            w = int(watermark.size[0] * ratio / 4)
+            h = int(watermark.size[1] * ratio / 4)
+            watermark = watermark.resize((w, h))
 
-    logging.info("Using the {0} best chips for {1} order method".format(len(ordered_pairs), method))
-    return ordered_pairs
+            layer.paste(watermark, ((tile_size - w) - 20, 20))
+            watermarked_image = Image.composite(layer, image_palette, layer)
 
+            return watermarked_image
 
-def get_chip(image_ids, width=512, resolution=0.3, debug=False, method=None):
-    """
-    Get an IDAHO/IPE image chip
-    :param image_ids: set of IDAHO ids for multi and pan images
-    :return: a PIL PNG image in numpy array format
-    """
-
-    # IDAHO/IPE TMS Chipper
-    # http://gbdxdocs.digitalglobe.com/v1/docs/get-tms-tile
-    bucket_name = 'idaho-images'
-    idaho_id_multi = image_ids[0]
-    idaho_id_pan = image_ids[1]
-    # width = 512
-    height = width
-    bands = '2,1,0'
-    url = 'http://idaho.geobigdata.io/v1/chip/centroid/{bucket_name}/{idaho_id_multi}?' \
-          'lat={lat}&long={long}&panId={idaho_id_pan}' \
-          '&bands={bands}&doDRA=true&brightness=1' \
-          '&width={width}&height={height}&resolution={resolution}' \
-          '&token={access_token}'.format(bucket_name=bucket_name, idaho_id_multi=idaho_id_multi,
-                                         idaho_id_pan=idaho_id_pan,
-                                         lat=lat, long=lon, bands=bands,
-                                         width=width, height=height, resolution=resolution,
-                                         access_token=access_token)
-    try:
-        response = requests.get(url)
-
-        image = Image.open(StringIO(response.content))
-        image.load()
-        image_palette = image.convert("RGB")
-
-        logging.info("Got chip: {}".format(str(idaho_id_multi)))
-
-        # check for bright chips
-        # http://stackoverflow.com/questions/3490727/what-are-some-methods-to-analyze-image-brightness-using-python
-        image_l = image.convert("L")
-        stat = ImageStat.Stat(image_l)
-        logging.debug("Mean brightness: {}".format(stat.mean[0]))
-        if stat.mean[0] > 220:
-            logging.debug("bright image thrown out")
+        except Exception as e:
+            logging.error("Something bad happened: {}".format(e))
             return None
-        elif stat.mean[0] < 45:
-            logging.debug("black or grey image thrown out")
-            return None
-        else:
-            pass
 
-        # check for black chips
-        count = 0
-        # tic = time.time()
-        pixels = image_palette.load()
-        for x in range(0, width, int(width / 100)):
-            c_pixel = pixels[x, x]
-            if c_pixel == (0, 0, 0):
-                count += 1
-        # print("sample pixels took {} seconds".format(time.time() - tic))
-        logging.debug("Number of sampled black pixels: {}".format(count))
+    def stack_chips(self):
+        """
+        Get all the image chips
 
-        if count < 10:
-            # image_palette.show()
-            pass
-        else:
-            logging.debug("black chip thrown out")
-            return None
+        :return: a list of PIL PNG images
+        """
+        images = []
+        count = 1
+        for result in self.results:
+            logging.info("Getting chip {0} out of {1}...".format(count, len(self.results)))
+            count += 1
+            chip = self.get_chip(result["properties"]["catalogID"],
+                                 result["properties"]["acquisitionDate"], self.lat, self.lon, self.tile_size)
+            # skip None's
+            if chip is not None:
+                images.append(chip)
 
-        draw = ImageDraw.Draw(image_palette)
-        font = ImageFont.truetype("/Library/Fonts/Arial Bold.ttf", 16)
-        # watermark idaho image id
-        if debug:
-            draw.text((20, 20), idaho_id_multi, (255, 255, 255), font=font)
-        # watermark timestamp
-        if method == "date":
-            draw.text((20, width - 20), image_ids[5].strftime("%Y-%m-%dT%H:%M:%S.%fZ"), (255, 255, 255), font=font)
+        logging.info("Number of unique chips in GIF: {}".format(len(images)))
+        return images
 
-        layer = Image.new('RGBA', image_palette.size, (0, 0, 0, 0))
-        watermark = Image.open("dglogo-whiteonly-std.png")
+    def fade_images(self):
+        """
+        Insert faded image for transitions.
+        """
 
-        # scale, but preserve the aspect ratio
-        ratio = min(
-            float(image_palette.size[0]) / watermark.size[0], float(image_palette.size[1]) / watermark.size[1])
-        w = int(watermark.size[0] * ratio) / 4
-        h = int(watermark.size[1] * ratio) / 4
-        watermark = watermark.resize((w, h))
+        images_w_fade = [self.images[0]]
 
-        layer.paste(watermark, ((width - w) - 20, 20))
-        watermarked_image = Image.composite(layer, image_palette, layer)
+        for i in range(0, len(self.images) - 1):
+            blended = Image.blend(self.images[i], self.images[i + 1], alpha=0.5)
+            images_w_fade.append(blended)
+            images_w_fade.append(self.images[i + 1])
 
-        return watermarked_image
+        self.images = images_w_fade
 
-    except Exception as e:
-        logging.error("Something bad happened: {}".format(e))
-        return None
+    def create_gif(self):
+        """
+        Create the GIF!
+        """
 
+        # Convert from PIL to numpy array
+        image_np = []
+        for image in self.images:
+            image_np.append(np.array(image))
 
-def stack_chips(pairs, width, resolution, debug, method):
-    """
-    Get all the image chips
+        dur = [0.1] * len(self.images)
+        for i in range(0, len(self.images), 4):
+            dur[i] = 0.5
 
-    :param pairs: IDAHO image ids
-    :param width: pass chip width from cmd line into TMS chipper
-    :return: a list of PIL PNG images
-    """
-    images = []
-    count = 1
-    for pair in pairs:
-        logging.info("Getting chip {0} out of {1}...".format(count, len(pairs)))
-        count += 1
-        chip = get_chip(pair, width, resolution, debug, method)
-        # skip None's
-        if chip is not None:
-            images.append(chip)
-
-    logging.info("Number of unique chips in GIF: {}".format(len(images)))
-    return images
-
-
-def fade_images(images):
-    """
-    Insert faded image for transitions.
-
-    :param images:
-    :return:
-    """
-    images_w_fade = []
-    images_w_fade.append(images[0])
-
-    for i in range(0, len(images) - 1):
-        blended = Image.blend(images[i], images[i + 1], alpha=0.5)
-        images_w_fade.append(blended)
-        images_w_fade.append(images[i + 1])
-
-    return images_w_fade
-
-
-def create_gif(images):
-    """
-    Create the GIF!
-
-    :param images: list of PIL PNGs
-    :return: None
-    """
-
-    # Convert from PIL to numpy array
-    image_np = []
-    for image in images:
-        image_np.append(np.array(image))
-
-    dur = [0.1] * len(images)
-    for i in range(0, len(images), 4):
-        dur[i] = 0.5
-
-    kargs = {'duration': dur}
-    imageio.mimsave('my.gif', image_np, **kargs)
+        kargs = {'duration': dur}
+        imageio.mimsave('my.gif', image_np, **kargs)
 
 
 if __name__ == "__main__":
@@ -387,15 +370,7 @@ if __name__ == "__main__":
 
     tic = time.time()
 
-    # set default values for lat long
-    latlong = arguments["--coord"]
-    latlong_dict = latlong.split(", ")
-    lat = latlong_dict[0]
-    lon = latlong_dict[1]
-
-    width = int(arguments["--width"])
-    resolution = float(arguments["--resolution"])
-    method = arguments["--order"]
+    latlong = arguments["--coord"].split(", ")
     verbose = arguments["--verbose"] or arguments["-v"]
 
     # Setup logging
@@ -411,19 +386,7 @@ if __name__ == "__main__":
     except OSError:
         pass
 
-    results_json = catalog_search(lat, lon)
-
-    id_pairs = parse_search(results_json)
-
-    ordered_id_pairs = order_images(id_pairs, method)
-
-    images = stack_chips(ordered_id_pairs, width, resolution, verbose, method)
-
-    images_with_fade = fade_images(fade_images(images))  # fade twice
-
-    reversed_images = list(reversed(images_with_fade[1:-1]))
-
-    create_gif(images_with_fade + reversed_images)
+    Gifr(latlong[0], latlong[1], int(arguments["--width"]), arguments["--order"])
 
     toc = time.time()
 
