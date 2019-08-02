@@ -66,25 +66,13 @@ import numpy as np
 import requests
 from PIL import Image, ImageStat, ImageDraw, ImageFont
 from docopt import docopt
-
-# DON'T CHECK-IN WITH TOKEN
-access_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Ik1Ea3hPREE1UTBFeFJUTXpOek01UlVSRE5qWTRRelpHT1ROR1FUWTBN" \
-               "MFJHTnpjMFEwTTFSZyJ9.eyJodHRwczovL2dlb2JpZ2RhdGEuaW8vYWNjb3VudF9sZXZlbCI6ImN1c3RvbSIsImh0dHBzOi8vZ2V" \
-               "vYmlnZGF0YS5pby9pZCI6Ijk4NTk3OGUwLThhMTktNDQ2ZS1iODU2LWNmZDAzOTczNzBhMyIsImh0dHBzOi8vZ2VvYmlnZGF0YS5" \
-               "pby9hY2NvdW50X2lkIjoiN2IyMTZiZDktNjUyMy00Y2E5LWFhM2ItMWQ4YTU5OTRmMDU0IiwiaHR0cHM6Ly9nZW9iaWdkYXRhLml" \
-               "vL3JvbGVzIjpbInN1cGVyX2FkbWluIl0sImh0dHBzOi8vZ2VvYmlnZGF0YS5pby9lbWFpbCI6ImFzaGxleS5kZWFuZXJAZGlnaXR" \
-               "hbGdsb2JlLmNvbSIsImlzcyI6Imh0dHBzOi8vZGlnaXRhbGdsb2JlLXByb2R1Y3Rpb24uYXV0aDAuY29tLyIsInN1YiI6ImF1dGg" \
-               "wfGdiZHh8MTEiLCJhdWQiOlsiZ2VvYmlnZGF0YS5pbyIsImh0dHBzOi8vZGlnaXRhbGdsb2JlLXByb2R1Y3Rpb24uYXV0aDAuY29" \
-               "tL3VzZXJpbmZvIl0sImlhdCI6MTU2NDY3ODI0NCwiZXhwIjoxNTY1MjgzMDQ0LCJhenAiOiJkYnhVNWNaZGtPMFNIVG1zaEZDV25" \
-               "JODk0dnhRMU5ieiIsInNjb3BlIjoib3BlbmlkIGVtYWlsIG9mZmxpbmVfYWNjZXNzIiwiZ3R5IjoicGFzc3dvcmQifQ.TAQhvfY" \
-               "HgvmI_e3RJtDwtcoVdUv24kRgQ8CfacH0RcWZZttKPa-zl1MI04IE9njxCH6KbbvIxZjG4MNQLaxLU9d_Ou_SQ8NjOe6oxwh3dr" \
-               "qJt7LAVHf86rRVjmSGHtMlP4YstHRZ5Pgz5yayaCkm9oVgUWQKY_F_gRC_N7VWpG6g1XlKKPafDa0D9tJHv70Qq2giczV-EsHcU" \
-               "M67MvO_FieivyHVc1lucZjTEva7hpy3gTEszcNAVxPMEA6yLRAoRVr1jKcIXSDb6D31qZLWyaWVNbY5N_lY5ZLE5JlzZe21X3xq" \
-               "pjvUkREKpBUCXMe-s5_lkWC5J4XOwn0W8QD1yA"
+from gbdx_auth import gbdx_auth
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s: %(funcName)s: %(message)s",
                     datefmt="%Y-%m-%d %H:%M:%S")
+
+global access_token
 
 
 class Gifr:
@@ -221,7 +209,7 @@ class Gifr:
         logging.info("Using the {0} best chips for {1} order method".format(len(self.results), self.order))
 
     @staticmethod
-    def get_chip(catalog_id, date, lat, lon, tile_size, debug=False, method=None):
+    def get_chip(catalog_id, date, lat, lon, tile_size, x_translate, y_translate, debug=False, method=None):
         """
         Get an IDAHO/IPE image chip
         :return: a PIL PNG image in numpy array format
@@ -230,20 +218,34 @@ class Gifr:
         # IDAHO/IPE TMS Chipper
         # http://gbdxdocs.digitalglobe.com/v1/docs/get-tms-tile
 
-        url = 'https://rda-api-v2-alpha.geobigdata.io/v2/template/' \
-              'a0d835db2dc7e2917bdf2b96300b9a1975fb2ef54d981d7f1d6a8f4c3eea915c' \
-              '/webtile/0/0?' \
-              'p=catalogId={catalog_id}' \
-              '&p=draType=RADIOMETRICDRA' \
-              '&p=crs=EPSG:32645' \
-              '&p=correctionType=Acomp' \
-              '&p=bands=Pansharp' \
-              '&p=destAT=%5B0.5, 0, 0, -0.5, 633242.065802063, 2495687.96968152%5D' \
-              '&p=bandSelection=RGB' \
-              '&nodeid=TileSize' \
-              '&ptileSize={tile_size}'.format(catalog_id=catalog_id,
-                                              lat=lat, long=lon, tile_size=tile_size)
         try:
+            url_point = 'https://ughlicoordinatesapi.geobigdata.io/v2/reproject'
+            body ={"source": {"crs": "EPSG:4326", "geometry": "POINT({lon} {lat})".format(lat=lat, lon=lon)}, "destination": {"crs":"EPSG:32645"}}
+            response_point = requests.post(url_point, data=json.dumps(body),
+                                           headers={"Accept": "application/json",
+                                                    "Content-Type": "application/json"})
+
+            point = json.loads(response_point.content).get("geometry")
+            m_lon = point.split(" (")[1].split(" ")[0]
+            m_lat = point.split(" ")[-1].split(")")[0]
+
+            url = 'https://rda-api-v2-alpha.geobigdata.io/v2/template/' \
+                  '8cbd4d8e194f10a365476578023d08834debe65e71c7477ce8f2a98139c9d7a2' \
+                  '/webtile/0/0?' \
+                  'p=catalogId={catalog_id}' \
+                  '&p=draType=RADIOMETRICDRA' \
+                  '&p=crs=EPSG:32645' \
+                  '&p=correctionType=Acomp' \
+                  '&p=bands=Pansharp' \
+                  '&p=destAT=%5B0.5, 0, 0, -0.5, {lon}, {lat}%5D' \
+                  '&p=bandSelection=RGB' \
+                  '&nodeid=TileSize' \
+                  '&p=tileSize={tile_size}' \
+                  '&p=xtranslate={x_translate}' \
+                  '&p=ytranslate={y_translate}'.format(catalog_id=catalog_id,
+                                                     lat=m_lat, lon=m_lon, tile_size=tile_size,
+                                                     x_translate=x_translate, y_translate=y_translate)
+
             response = requests.get(url, headers={"Accept": "image/png",
                                                   "Authorization": "Bearer " + access_token})
 
@@ -295,7 +297,8 @@ class Gifr:
                 draw.text((20, tile_size - 20), date.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), (255, 255, 255), font=font)
 
             layer = Image.new('RGBA', image_palette.size, (0, 0, 0, 0))
-            watermark = Image.open("dglogo-whiteonly-std.png")
+            # watermark = Image.open("dglogo-whiteonly-std.png")
+            watermark = Image.open("maxar_green_logo.jpg")
 
             # scale, but preserve the aspect ratio
             ratio = min(
@@ -319,13 +322,22 @@ class Gifr:
 
         :return: a list of PIL PNG images
         """
+
+        offsets = json.load(open("offsets.json"))
         images = []
         count = 1
         for result in self.results:
             logging.info("Getting chip {0} out of {1}...".format(count, len(self.results)))
             count += 1
-            chip = self.get_chip(result["properties"]["catalogID"],
-                                 result["properties"]["acquisitionDate"], self.lat, self.lon, self.tile_size)
+            catalog_id = result["properties"]["catalogID"]
+            x_translate = 0.0
+            y_translate = 0.0
+            if catalog_id in offsets:
+                x_translate = offsets.get(catalog_id).get("xtranslate")
+                y_translate = offsets.get(catalog_id).get("ytranslate")
+            chip = self.get_chip(catalog_id,
+                                 result["properties"]["acquisitionDate"], self.lat, self.lon, self.tile_size,
+                                 x_translate, y_translate)
             # skip None's
             if chip is not None:
                 images.append(chip)
@@ -386,7 +398,9 @@ if __name__ == "__main__":
     except OSError:
         pass
 
-    Gifr(latlong[0], latlong[1], int(arguments["--width"]), arguments["--order"])
+    access_token = gbdx_auth.get_session().access_token
+
+    Gifr(float(latlong[0]), float(latlong[1]), int(arguments["--width"]), arguments["--order"])
 
     toc = time.time()
 
